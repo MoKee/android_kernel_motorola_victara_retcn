@@ -13,6 +13,7 @@
 #include <linux/linkage.h>
 #include <linux/init.h>
 #include <asm/assembler.h>
+#include <asm/errno.h>
 #include <asm/unwind.h>
 
 #include "proc-macros.S"
@@ -29,7 +30,7 @@ ENTRY(v7_flush_icache_all)
 	mov	r0, #0
 	ALT_SMP(mcr	p15, 0, r0, c7, c1, 0)		@ invalidate I-cache inner shareable
 	ALT_UP(mcr	p15, 0, r0, c7, c5, 0)		@ I+BTB cache invalidate
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_flush_icache_all)
 
  /*
@@ -43,11 +44,21 @@ ENDPROC(v7_flush_icache_all)
 ENTRY(v7_flush_dcache_louis)
 	dmb					@ ensure ordering with previous memory accesses
 	mrc	p15, 1, r0, c0, c0, 1		@ read clidr, r0 = clidr
-	ands	r3, r0, #0xe00000		@ extract LoUIS from clidr
-	mov	r3, r3, lsr #20			@ r3 = LoUIS * 2
-	moveq	pc, lr				@ return if level == 0
+	ALT_SMP(ands	r3, r0, #(7 << 21))	@ extract LoUIS from clidr
+	ALT_UP(ands	r3, r0, #(7 << 27))	@ extract LoUU from clidr
+#ifdef CONFIG_ARM_ERRATA_643719
+	ALT_SMP(mrceq	p15, 0, r2, c0, c0, 0)	@ read main ID register
+	ALT_UP(reteq	lr)			@ LoUU is zero, so nothing to do
+	ldreq	r1, =0x410fc090                 @ ID of ARM Cortex A9 r0p?
+	biceq	r2, r2, #0x0000000f             @ clear minor revision number
+	teqeq	r2, r1                          @ test for errata affected core and if so...
+	orreqs	r3, #(1 << 21)			@   fix LoUIS value (and set flags state to 'ne')
+#endif
+	ALT_SMP(mov	r3, r3, lsr #20)	@ r3 = LoUIS * 2
+	ALT_UP(mov	r3, r3, lsr #26)	@ r3 = LoUU * 2
+	reteq	lr				@ return if level == 0
 	mov	r10, #0				@ r10 (starting level) = 0
-	b	loop1				@ start flushing cache levels
+	b	flush_levels			@ start flushing cache levels
 ENDPROC(v7_flush_dcache_louis)
 
 /*
@@ -66,7 +77,7 @@ ENTRY(v7_flush_dcache_all)
 	mov	r3, r3, lsr #23			@ left align loc bit field
 	beq	finished			@ if loc is 0, then no need to clean
 	mov	r10, #0				@ start clean at cache level 0
-loop1:
+flush_levels:
 	add	r2, r10, r10, lsr #1		@ work out 3x current cache level
 	mov	r1, r0, lsr r2			@ extract cache type bits from clidr
 	and	r1, r1, #7			@ mask of the bits for current cache only
@@ -88,30 +99,30 @@ loop1:
 	clz	r5, r4				@ find bit position of way size increment
 	ldr	r7, =0x7fff
 	ands	r7, r7, r1, lsr #13		@ extract max number of the index size
+loop1:
+	mov	r9, r7				@ create working copy of max index
 loop2:
-	mov	r9, r4				@ create working copy of max way size
-loop3:
- ARM(	orr	r11, r10, r9, lsl r5	)	@ factor way and cache number into r11
- THUMB(	lsl	r6, r9, r5		)
+ ARM(	orr	r11, r10, r4, lsl r5	)	@ factor way and cache number into r11
+ THUMB(	lsl	r6, r4, r5		)
  THUMB(	orr	r11, r10, r6		)	@ factor way and cache number into r11
- ARM(	orr	r11, r11, r7, lsl r2	)	@ factor index number into r11
- THUMB(	lsl	r6, r7, r2		)
+ ARM(	orr	r11, r11, r9, lsl r2	)	@ factor index number into r11
+ THUMB(	lsl	r6, r9, r2		)
  THUMB(	orr	r11, r11, r6		)	@ factor index number into r11
 	mcr	p15, 0, r11, c7, c14, 2		@ clean & invalidate by set/way
-	subs	r9, r9, #1			@ decrement the way
-	bge	loop3
-	subs	r7, r7, #1			@ decrement the index
+	subs	r9, r9, #1			@ decrement the index
 	bge	loop2
+	subs	r4, r4, #1			@ decrement the way
+	bge	loop1
 skip:
 	add	r10, r10, #2			@ increment cache number
 	cmp	r3, r10
-	bgt	loop1
+	bgt	flush_levels
 finished:
 	mov	r10, #0				@ swith back to cache level 0
 	mcr	p15, 2, r10, c0, c0, 0		@ select current cache level in cssr
 	dsb
 	isb
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_flush_dcache_all)
 
 /*
@@ -134,7 +145,7 @@ ENTRY(v7_flush_kern_cache_all)
 	ALT_UP(mcr	p15, 0, r0, c7, c5, 0)	@ I+BTB cache invalidate
  ARM(	ldmfd	sp!, {r4-r5, r7, r9-r11, lr}	)
  THUMB(	ldmfd	sp!, {r4-r7, r9-r11, lr}	)
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_flush_kern_cache_all)
 
  /*
@@ -152,7 +163,7 @@ ENTRY(v7_flush_kern_cache_louis)
 	ALT_UP(mcr	p15, 0, r0, c7, c5, 0)	@ I+BTB cache invalidate
  ARM(	ldmfd	sp!, {r4-r5, r7, r9-r11, lr}	)
  THUMB(	ldmfd	sp!, {r4-r7, r9-r11, lr}	)
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_flush_kern_cache_louis)
 
 /*
@@ -178,7 +189,7 @@ ENTRY(v7_flush_user_cache_all)
  *	- we have a VIPT cache.
  */
 ENTRY(v7_flush_user_cache_range)
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_flush_user_cache_all)
 ENDPROC(v7_flush_user_cache_range)
 
@@ -225,7 +236,7 @@ ENTRY(v7_coherent_user_range)
 	add	r12, r12, r2
 	cmp	r12, r1
 	blo	1b
-	dsb
+	dsb	ishst
 	icache_line_size r2, r3
 	sub	r3, r2, #1
 	bic	r12, r0, r3
@@ -234,26 +245,23 @@ ENTRY(v7_coherent_user_range)
 	add	r12, r12, r2
 	cmp	r12, r1
 	blo	2b
-3:
 	mov	r0, #0
 	ALT_SMP(mcr	p15, 0, r0, c7, c1, 6)	@ invalidate BTB Inner Shareable
 	ALT_UP(mcr	p15, 0, r0, c7, c5, 6)	@ invalidate BTB
-	dsb
+	dsb	ishst
 	isb
-	mov	pc, lr
+	ret	lr
 
 /*
  * Fault handling for the cache operation above. If the virtual address in r0
- * isn't mapped, just try the next page.
+ * isn't mapped, fail with -EFAULT.
  */
 9001:
 #ifdef CONFIG_ARM_ERRATA_775420
 	dsb
 #endif
-	mov	r12, r12, lsr #12
-	mov	r12, r12, lsl #12
-	add	r12, r12, #4096
-	b	3b
+	mov	r0, #-EFAULT
+	ret	lr
  UNWIND(.fnend		)
 ENDPROC(v7_coherent_kern_range)
 ENDPROC(v7_coherent_user_range)
@@ -282,7 +290,7 @@ ENTRY(v7_flush_kern_dcache_area)
 	cmp	r0, r1
 	blo	1b
 	dsb
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_flush_kern_dcache_area)
 
 /*
@@ -315,7 +323,7 @@ v7_dma_inv_range:
 	cmp	r0, r1
 	blo	1b
 	dsb
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_dma_inv_range)
 
 /*
@@ -337,7 +345,7 @@ v7_dma_clean_range:
 	cmp	r0, r1
 	blo	1b
 	dsb
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_dma_clean_range)
 
 /*
@@ -359,7 +367,7 @@ ENTRY(v7_dma_flush_range)
 	cmp	r0, r1
 	blo	1b
 	dsb
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_dma_flush_range)
 
 /*
@@ -385,7 +393,7 @@ ENTRY(v7_dma_unmap_area)
 	add	r1, r1, r0
 	teq	r2, #DMA_TO_DEVICE
 	bne	v7_dma_inv_range
-	mov	pc, lr
+	ret	lr
 ENDPROC(v7_dma_unmap_area)
 
 	__INITDATA
