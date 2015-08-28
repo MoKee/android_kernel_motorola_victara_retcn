@@ -160,9 +160,12 @@ config ARM_TICKET_LOCKS
 	default y if ARCH_MSM_SCORPIONMP || ARCH_MSM_KRAITMP
 	depends on SMP
 
-config RWSEM_XCHGADD_ALGORITHM
+config RWSEM_GENERIC_SPINLOCK
 	bool
 	default y
+
+config RWSEM_XCHGADD_ALGORITHM
+	bool
 
 config ARCH_HAS_ILOG2_U32
 	bool
