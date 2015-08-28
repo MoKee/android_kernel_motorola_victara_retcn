@@ -135,8 +135,5 @@ $(obj)/crc32.o: $(obj)/crc32table.h
 quiet_cmd_crc32 = GEN     $@
       cmd_crc32 = $< > $@
 
-obj-$(CONFIG_GENERIC_STRNCPY_FROM_USER) += strncpy_from_user.o
-obj-$(CONFIG_GENERIC_STRNLEN_USER) += strnlen_user.o
-
 $(obj)/crc32table.h: $(obj)/gen_crc32table
 	$(call cmd,crc32)
